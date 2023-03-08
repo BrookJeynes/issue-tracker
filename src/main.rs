@@ -11,9 +11,17 @@ use std::time::Duration;
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 struct Args {
-    /// GIthub access token
+    /// Github access token
     #[arg(short, long)]
-    token: String,
+    token: Option<String>,
+
+    /// Github user name
+    #[arg(short, long)]
+    user_name: Option<String>,
+
+    /// Print the config file path
+    #[clap(short, long, action)]
+    file_path: bool,
 }
 
 #[derive(Deserialize, Debug)]
@@ -32,12 +40,14 @@ impl fmt::Display for Issue {
 #[derive(Serialize, Deserialize)]
 struct Config {
     github_access_token: String,
+    user_name: String,
 }
 
 impl ::std::default::Default for Config {
     fn default() -> Self {
         Self {
             github_access_token: String::from(""),
+            user_name: String::from(""),
         }
     }
 }
@@ -51,22 +61,43 @@ async fn main() -> Result<()> {
     });
     let args = Args::parse();
 
-    if !args.token.is_empty() {
-        let new_config = Config {
-            github_access_token: args.token,
-        };
+    if args.file_path {
+        eprintln!("{:?}", confy::get_configuration_file_path("issue-tracker", None).unwrap());
+        std::process::exit(1);
+    }
 
-        confy::store("issue-tracker", None, &new_config).unwrap_or_else(|err| {
-            eprintln!("{}: {}", "Error".red().bold(), err);
-            std::process::exit(1);
-        });
 
+    let new_config = Config {
+        github_access_token: args.token.unwrap_or(String::new()),
+        user_name: args.user_name.unwrap_or(String::new()),
+    };
+
+    if !new_config.github_access_token.is_empty()
+        && new_config.github_access_token != cfg.github_access_token
+    {
         cfg.github_access_token = new_config.github_access_token;
     }
+
+    if !new_config.user_name.is_empty() && new_config.user_name != cfg.user_name {
+        cfg.user_name = new_config.user_name;
+    }
+
+    confy::store("issue-tracker", None, &cfg).unwrap_or_else(|err| {
+        eprintln!("{}: {}", "Error".red().bold(), err);
+        std::process::exit(1);
+    });
 
     if cfg.github_access_token.is_empty() {
         eprintln!(
             "{}: No Github access token set. Please set one with the --token (-t) flag.",
+            "Error".red().bold()
+        );
+        std::process::exit(1);
+    }
+
+    if cfg.user_name.is_empty() {
+        eprintln!(
+            "{}: No Github user name is set. Please set one with the --user-name (-u) flag.",
             "Error".red().bold()
         );
         std::process::exit(1);
@@ -83,13 +114,10 @@ async fn main() -> Result<()> {
 
     let res = client
         .get("https://api.github.com/issues")
-        .header(
-            AUTHORIZATION,
-            format!("Bearer {}", cfg.github_access_token),
-        )
+        .header(AUTHORIZATION, format!("Bearer {}", cfg.github_access_token))
         .header(ACCEPT, "application/vnd.github+json")
         .header("X-GitHub-Api-Version", "2022-11-28")
-        .header(USER_AGENT, "BrookJeynes")
+        .header(USER_AGENT, cfg.user_name)
         .send()
         .await
         .unwrap_or_else(|err| {
